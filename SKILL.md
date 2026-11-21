@@ -5,13 +5,13 @@ description: Create editable Chinese or English PowerPoint decks for scientific 
 
 # Research Talk PPT
 
-Turn the scientific argument into an editable 16:9 deck. Default to the user's language and stated duration. If neither duration nor slide count is given, plan about 10–13 slides for 15 minutes. Use the local renderer when the requested deliverable is a local PPTX.
+Turn the scientific argument into an editable 16:9 deck. Default to the user's language, audience and timing. Follow an explicitly requested visual template when supplied.
 
-1. Read the supplied evidence. Prefer the paper and figures for claims and the latest verified run artifacts for the user's own results. DeepPaperNote output is a useful index. Check central values, cohorts, baselines and metric directions against their sources.
-2. Draft a slide sequence around the scientific question, source of evidence, mechanism, strongest comparison, failure case, and limitations. Adapt this order for progress talks or short talks. Use `references/layouts.md` for page selection and evidence handling.
-3. Prepare UTF-8 JSON following `examples/demo.json`. For figure pages, supply visually checked crops and preserve panel letters, axes, uncertainty and legends. Resolve image paths from the manifest directory. Place one supported takeaway on an evidence page, with a source locator and speaker notes.
-4. Build using Python 3.10+ with `python-pptx>=1.0.2,<2`. Resolve the script relative to this skill directory.
+1. Read the evidence. Prefer the paper and figures for claims and the latest verified run artifacts for the user's own results. Check central values, cohorts, baselines and metric directions. DeepPaperNote is a useful index.
+2. Read `references/layouts.md`. For each main slide, choose the question, the evidence the audience should look at first, and the answer they can take away. Plan the sequence from question to mechanism, comparison and boundary. Use an instructive failure or difficult example when available and give it a separate page when it answers a different question from the aggregate result.
+3. Build the page around the chosen figure or diagram. Crop to the relevant panels, retaining labels, axes, uncertainty and legends. If details are too small for projection, split the figures along the argument. Let the slide title or a short sentence under the evidence state the conclusion once. Put narration in notes and keep qualifiers visible when they change the meaning of the claim.
+4. Create a UTF-8 JSON manifest following `examples/demo.json`. Use a white canvas, dark main text, quiet sources and one optional highlight per slide. Preserve paper colors that encode scientific information. Use the local renderer for a local PPTX with Python 3.10+ and `python-pptx>=1.0.2,<2`. Resolve the script relative to this skill directory.
    `python scripts/build_deck.py path/to/deck.json path/to/output.pptx`
-5. Reopen the PPTX to verify slides, notes and media. Render with available PowerPoint or LibreOffice and inspect every slide at presentation size. Check Chinese glyphs, long titles, cropped panels, evidence footers and readability. Report any verification unavailable. Return the deck and optionally the editable manifest when requested.
+5. Render with PowerPoint or LibreOffice. Scan the deck as thumbnails to check that each slide has a clear focal point, then inspect every slide at presentation size for readable axes, labels, glyphs and footers. Reopen the PPTX to verify notes and separate image objects. Report any unavailable verification.
 
 Use only materials authorized for the requested audience. For public examples use original or appropriately licensed assets with attribution. Keep source figures as separate image objects. Use native editable text and shapes for the narrative and simple diagrams.

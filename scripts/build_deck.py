@@ -6,15 +6,19 @@ from pathlib import Path
 from pptx import Presentation
 from pptx.dml.color import RGBColor
 from pptx.enum.shapes import MSO_SHAPE
+from pptx.enum.text import PP_ALIGN
+from pptx.oxml.ns import qn
+from pptx.oxml.xmlchemy import OxmlElement
 from pptx.util import Inches, Pt
 
 
-INK = "162A36"
-ACCENT = "006F69"
-MUTED = "415765"
-PAPER = "FAFBFA"
-TINT = "E8F3F0"
+INK = "172026"
+ACCENT = "A64310"
+MUTED = "505960"
+PAPER = "FFFFFF"
 FONT = "Microsoft YaHei"
+MARGIN = 0.58
+CONTENT_W = 12.17
 
 
 def color(hex_value):
@@ -25,13 +29,22 @@ def box(slide, x, y, width, height, fill):
     shape = slide.shapes.add_shape(
         MSO_SHAPE.RECTANGLE, Inches(x), Inches(y), Inches(width), Inches(height)
     )
-    shape.fill.solid()
-    shape.fill.fore_color.rgb = color(fill)
+    style = shape._element.find(qn("p:style"))
+    if style is not None:
+        shape._element.remove(style)
     shape.line.fill.background()
+    if fill:
+        shape.fill.solid()
+        shape.fill.fore_color.rgb = color(fill)
+    else:
+        shape.fill.background()
     return shape
 
 
-def text(slide, value, x, y, width, height, size, ink=INK, bold=False):
+def text(slide, value, x, y, width, height, size, ink=INK, bold=False,
+         align=PP_ALIGN.LEFT, emphasis=""):
+    if not value:
+        return
     frame = slide.shapes.add_textbox(
         Inches(x), Inches(y), Inches(width), Inches(height)
     ).text_frame
@@ -40,10 +53,26 @@ def text(slide, value, x, y, width, height, size, ink=INK, bold=False):
     frame.margin_top = frame.margin_bottom = Pt(0)
     frame.text = value
     for paragraph in frame.paragraphs:
+        paragraph.alignment = align
+        paragraph.space_before = paragraph.space_after = Pt(0)
+        paragraph.line_spacing = 1.08
         paragraph.font.name = FONT
         paragraph.font.size = Pt(size)
         paragraph.font.bold = bold
         paragraph.font.color.rgb = color(ink)
+        # Explicit East Asian fallback keeps CJK text independent of the slide theme.
+        east_asian = OxmlElement("a:ea")
+        east_asian.set("typeface", FONT)
+        paragraph._p.get_or_add_pPr().get_or_add_defRPr().append(east_asian)
+        if emphasis and emphasis in paragraph.text:
+            before, _, after = paragraph.text.partition(emphasis)
+            paragraph.clear()
+            paragraph.add_run().text = before
+            focus = paragraph.add_run()
+            focus.text = emphasis
+            focus.font.color.rgb = color(ACCENT)
+            paragraph.add_run().text = after
+            emphasis = ""
 
 
 def picture(slide, path, x, y, width, height):
@@ -53,39 +82,66 @@ def picture(slide, path, x, y, width, height):
     shape.height = round(shape.height * scale)
     shape.left = Inches(x) + (Inches(width) - shape.width) // 2
     shape.top = Inches(y) + (Inches(height) - shape.height) // 2
+    return shape
+
+
+def outline_focus(slide, image, bounds):
+    x, y, width, height = bounds
+    if not (0 <= x < 1 and 0 <= y < 1 and width > 0 and height > 0
+            and x + width <= 1 and y + height <= 1):
+        raise ValueError("Highlight must lie within the image in normalized coordinates")
+    marker = box(slide, (image.left + image.width * x) / Inches(1),
+                 (image.top + image.height * y) / Inches(1),
+                 image.width * width / Inches(1), image.height * height / Inches(1), None)
+    marker.line.color.rgb = color(ACCENT)
+    marker.line.width = Pt(1.5)
 
 
 def draw_figure(slide, item, directory):
     images = item["images"]
     if not 1 <= len(images) <= 2:
         raise ValueError("A figure slide needs one or two images")
-    width = 12.17 if len(images) == 1 else 5.9
+    layout = item.get("layout", "row")
+    if layout not in {"row", "stack"}:
+        raise ValueError("Figure layout must be row or stack")
+    stacked = layout == "stack" and len(images) == 2
+    top = 1.42
+    bottom = 6.16 if item.get("takeaway") else 6.86
+    width = CONTENT_W if stacked or len(images) == 1 else (CONTENT_W - 0.35) / 2
+    block_height = (bottom - top - 0.18) / 2 if stacked else bottom - top
     for index, image in enumerate(images):
-        x = 0.58 + index * 6.27
-        picture(slide, directory / image["path"], x, 1.32, width, 4.45)
-        text(slide, image.get("caption", ""), x, 5.82, width, 0.34, 13, MUTED)
+        x = MARGIN if stacked else MARGIN + index * (width + 0.35)
+        y = top + index * (block_height + 0.18) if stacked else top
+        caption = image.get("caption", "")
+        image_height = block_height - (0.31 if caption else 0)
+        shape = picture(slide, directory / image["path"], x, y, width, image_height)
+        if "highlight" in image:
+            outline_focus(slide, shape, image["highlight"])
+        caption_y = (shape.top + shape.height) / Inches(1)
+        text(slide, caption, x, caption_y + 0.05,
+             width, 0.26, 12, MUTED, align=PP_ALIGN.CENTER)
 
 
 def draw_flow(slide, steps):
     if not 2 <= len(steps) <= 5:
         raise ValueError("A flow slide needs two to five steps")
-    width = (12.17 - (len(steps) - 1) * 0.28) / len(steps)
+    gap = 0.52
+    width = (CONTENT_W - (len(steps) - 1) * gap) / len(steps)
     for index, step in enumerate(steps):
-        x = 0.58 + index * (width + 0.28)
-        box(slide, x, 2.1, width, 2.7, TINT)
-        text(slide, step["label"], x + 0.18, 2.48, width - 0.36, 0.91, 22, ACCENT, True)
-        text(slide, step["body"], x + 0.18, 3.48, width - 0.36, 1.12, 16)
+        x = MARGIN + index * (width + gap)
+        text(slide, step["label"], x, 2.68, width, 0.8, 23, INK, True, PP_ALIGN.CENTER)
+        text(slide, step["body"], x, 3.63, width, 1.5, 17, MUTED, align=PP_ALIGN.CENTER)
         if index < len(steps) - 1:
-            text(slide, "→", x + width + 0.02, 3.12, 0.28, 0.42, 15, ACCENT)
+            text(slide, "→", x + width, 2.71, gap, 0.42, 18, MUTED, align=PP_ALIGN.CENTER)
 
 
 def draw_points(slide, points):
     if not 2 <= len(points) <= 4:
         raise ValueError("A points slide needs two to four points")
     for index, point in enumerate(points):
-        y = 1.58 + index * 1.13
-        box(slide, 0.58, y + 0.03, 0.06, 0.74, ACCENT)
-        text(slide, point, 0.84, y, 11.9, 0.86, 20)
+        y = 1.90 + index * 1.00
+        text(slide, "•", 1.22, y, 0.28, 0.48, 19, MUTED)
+        text(slide, point, 1.65, y, 10.45, 0.85, 22)
 
 
 def draw_slide(deck, item, directory, number):
@@ -93,12 +149,23 @@ def draw_slide(deck, item, directory, number):
     slide.background.fill.solid()
     slide.background.fill.fore_color.rgb = color(PAPER)
     kind = item["type"]
+    title = item["title"]
+    if not isinstance(title, str) or not title.strip():
+        raise ValueError("Slide title must be a nonempty string")
+    emphasis = item.get("emphasis", "")
+    highlights = sum("highlight" in image for image in item["images"]) if kind == "figure" else 0
+    if highlights + bool(emphasis) > 1:
+        raise ValueError("Use at most one highlight or title emphasis per slide")
+    if emphasis and not any(emphasis in line for line in title.splitlines()):
+        raise ValueError("Title emphasis must be a literal phrase on one line of the title")
     if kind in {"cover", "closing"}:
-        box(slide, 0.72, 1.75, 0.12, 3.38, ACCENT)
-        text(slide, item["title"], 1.02, 2.05, 11.1, 2.0, 38, INK, True)
-        text(slide, item.get("subtitle", ""), 1.04, 4.34, 10.9, 0.84, 19, MUTED)
+        text(slide, title, 1.00, 2.17, 11.33, 1.84, 39, INK, True,
+             PP_ALIGN.CENTER, emphasis)
+        text(slide, item.get("subtitle", ""), 1.00, 4.22, 11.33, 0.85,
+             18, MUTED, align=PP_ALIGN.CENTER)
     else:
-        text(slide, item["title"], 0.58, 0.36, 12.17, 0.82, 27, INK, True)
+        text(slide, title, MARGIN, 0.41, CONTENT_W, 0.92, 29, INK, True,
+             PP_ALIGN.CENTER, emphasis)
         if kind == "figure":
             draw_figure(slide, item, directory)
         elif kind == "flow":
@@ -107,11 +174,11 @@ def draw_slide(deck, item, directory, number):
             draw_points(slide, item["points"])
         else:
             raise ValueError(f"Unknown slide type: {kind}")
-        if item.get("takeaway"):
-            box(slide, 0.58, 6.24, 12.17, 0.52, TINT)
-            text(slide, item["takeaway"], 0.74, 6.34, 11.83, 0.31, 15, ACCENT, True)
-    text(slide, item.get("source", ""), 0.58, 7.05, 11.4, 0.28, 10, MUTED)
-    text(slide, str(number), 12.26, 7.05, 0.5, 0.28, 10, MUTED)
+        text(slide, item.get("takeaway", ""), MARGIN, 6.37, CONTENT_W, 0.54,
+             16, INK, align=PP_ALIGN.CENTER)
+    text(slide, item.get("source", ""), MARGIN, 7.10, 11.4, 0.25, 10, MUTED)
+    if kind not in {"cover", "closing"}:
+        text(slide, str(number), 12.25, 7.10, 0.5, 0.25, 10, MUTED, align=PP_ALIGN.RIGHT)
     if item.get("notes"):
         slide.notes_slide.notes_text_frame.text = item["notes"]
 
@@ -123,14 +190,22 @@ def main():
     args = parser.parse_args()
     if args.output.suffix.lower() != ".pptx":
         parser.error("Output must have a .pptx extension")
-    data = json.loads(args.manifest.read_text(encoding="utf-8-sig"))
-    slides = data["slides"]
+    try:
+        data = json.loads(args.manifest.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError) as exc:
+        parser.error(f"{args.manifest}: {exc}")
+    slides = data.get("slides") if isinstance(data, dict) else None
     if not isinstance(slides, list) or not slides:
         parser.error("The manifest must contain a nonempty slides list")
     deck = Presentation()
     deck.slide_width, deck.slide_height = Inches(13.3333), Inches(7.5)
     for number, item in enumerate(slides, start=1):
-        draw_slide(deck, item, args.manifest.parent, number)
+        try:
+            draw_slide(deck, item, args.manifest.parent, number)
+        except KeyError as exc:
+            parser.error(f"Slide {number}: missing field {exc}")
+        except (AttributeError, OSError, TypeError, ValueError) as exc:
+            parser.error(f"Slide {number}: {exc}")
     args.output.parent.mkdir(parents=True, exist_ok=True)
     deck.save(str(args.output))
 
