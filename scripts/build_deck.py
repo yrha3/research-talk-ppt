@@ -1,21 +1,25 @@
 """Render a research-talk JSON manifest to editable PowerPoint."""
 import argparse
 import json
+from math import isfinite
 from pathlib import Path
 
 from pptx import Presentation
 from pptx.dml.color import RGBColor
 from pptx.enum.shapes import MSO_SHAPE
-from pptx.enum.text import PP_ALIGN
+from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
 from pptx.oxml.ns import qn
 from pptx.oxml.xmlchemy import OxmlElement
 from pptx.util import Inches, Pt
 
 
 INK = "172026"
-ACCENT = "A64310"
+ACCENT = "A94F13"
+COVER_INK = "193A56"
 MUTED = "505960"
 PAPER = "FFFFFF"
+TABLE_HEAD = "EAF0F4"
+RULE = "D8DEE3"
 FONT = "Microsoft YaHei"
 MARGIN = 0.58
 CONTENT_W = 12.17
@@ -41,6 +45,12 @@ def box(slide, x, y, width, height, fill):
     return shape
 
 
+def east_asian_font(paragraph):
+    east_asian = OxmlElement("a:ea")
+    east_asian.set("typeface", FONT)
+    paragraph._p.get_or_add_pPr().get_or_add_defRPr().append(east_asian)
+
+
 def text(slide, value, x, y, width, height, size, ink=INK, bold=False,
          align=PP_ALIGN.LEFT, emphasis=""):
     if not value:
@@ -61,9 +71,7 @@ def text(slide, value, x, y, width, height, size, ink=INK, bold=False,
         paragraph.font.bold = bold
         paragraph.font.color.rgb = color(ink)
         # Explicit East Asian fallback keeps CJK text independent of the slide theme.
-        east_asian = OxmlElement("a:ea")
-        east_asian.set("typeface", FONT)
-        paragraph._p.get_or_add_pPr().get_or_add_defRPr().append(east_asian)
+        east_asian_font(paragraph)
         if emphasis and emphasis in paragraph.text:
             before, _, after = paragraph.text.partition(emphasis)
             paragraph.clear()
@@ -138,10 +146,69 @@ def draw_flow(slide, steps):
 def draw_points(slide, points):
     if not 2 <= len(points) <= 4:
         raise ValueError("A points slide needs two to four points")
+    if all(isinstance(point, dict) for point in points):
+        for index, point in enumerate(points):
+            y = 1.66 + index * 1.10
+            if index:
+                box(slide, 1.22, y - 0.15, 10.85, 0.01, RULE)
+            text(slide, point["label"], 1.22, y, 2.48, 0.72, 18, ACCENT, True)
+            text(slide, point["body"], 3.97, y, 8.10, 0.94, 19)
+        return
+    if not all(isinstance(point, str) for point in points):
+        raise ValueError("Points must all be strings or all be label/body objects")
     for index, point in enumerate(points):
         y = 1.90 + index * 1.00
         text(slide, "•", 1.22, y, 0.28, 0.48, 19, MUTED)
         text(slide, point, 1.65, y, 10.45, 0.85, 22)
+
+
+def draw_table(slide, item):
+    rows = item["rows"]
+    if not isinstance(rows, list) or len(rows) < 2 or not isinstance(rows[0], list) or not rows[0]:
+        raise ValueError("A table needs a nonempty header row and at least one data row")
+    columns = len(rows[0])
+    if any(not isinstance(row, list) or len(row) != columns for row in rows):
+        raise ValueError("All table rows must have the same number of cells")
+    widths = item.get("column_widths", [1] * columns)
+    if not isinstance(widths, list) or len(widths) != columns or any(
+        not isinstance(width, (int, float)) or not isfinite(width) or width <= 0 for width in widths
+    ):
+        raise ValueError("column_widths needs one positive weight per column")
+
+    lead = item.get("lead", "")
+    top = 1.81 if lead else 1.45
+    bottom = 6.13 if item.get("takeaway") else 6.53
+    height = min(bottom - top, 0.77 * len(rows))
+    y = top + (bottom - top - height) / 2
+    text(slide, lead, MARGIN, y - 0.53, CONTENT_W, 0.45, 15, MUTED, align=PP_ALIGN.CENTER)
+    table = slide.shapes.add_table(
+        len(rows), columns, Inches(MARGIN), Inches(y), Inches(CONTENT_W), Inches(height)
+    ).table
+    table.first_row = table.horz_banding = False
+    total = sum(widths)
+    for column, width in zip(table.columns, widths):
+        column.width = Inches(CONTENT_W * (width / total))
+
+    for index, values in enumerate(rows):
+        row = table.rows[index]
+        row.height = Inches(height / len(rows))
+        for cell, value in zip(row.cells, values):
+            if not isinstance(value, (str, int, float)):
+                raise ValueError("Table cells must contain text or a number")
+            cell.text = str(value)
+            cell.vertical_anchor = MSO_ANCHOR.MIDDLE
+            cell.margin_left = cell.margin_right = Inches(0.12)
+            cell.margin_top = cell.margin_bottom = Pt(1)
+            cell.fill.solid()
+            cell.fill.fore_color.rgb = color(TABLE_HEAD if index == 0 else PAPER)
+            for paragraph in cell.text_frame.paragraphs:
+                paragraph.space_before = paragraph.space_after = Pt(0)
+                paragraph.line_spacing = 1.0
+                paragraph.font.name = FONT
+                paragraph.font.size = Pt(14 if len(rows) >= 8 else 16)
+                paragraph.font.bold = index == 0
+                paragraph.font.color.rgb = color(INK)
+                east_asian_font(paragraph)
 
 
 def draw_slide(deck, item, directory, number):
@@ -159,15 +226,18 @@ def draw_slide(deck, item, directory, number):
     if emphasis and not any(emphasis in line for line in title.splitlines()):
         raise ValueError("Title emphasis must be a literal phrase on one line of the title")
     if kind in {"cover", "closing"}:
-        text(slide, title, 1.00, 2.17, 11.33, 1.84, 39, INK, True,
+        text(slide, title, 1.00, 2.17, 11.33, 1.84, 39, COVER_INK if kind == "cover" else INK, True,
              PP_ALIGN.CENTER, emphasis)
         text(slide, item.get("subtitle", ""), 1.00, 4.22, 11.33, 0.85,
              18, MUTED, align=PP_ALIGN.CENTER)
     else:
-        text(slide, title, MARGIN, 0.41, CONTENT_W, 0.92, 29, INK, True,
+        title_size = 24 if "\n" in title else 30
+        text(slide, title, MARGIN, 0.41, CONTENT_W, 0.92, title_size, INK, True,
              PP_ALIGN.CENTER, emphasis)
         if kind == "figure":
             draw_figure(slide, item, directory)
+        elif kind == "table":
+            draw_table(slide, item)
         elif kind == "flow":
             draw_flow(slide, item["steps"])
         elif kind == "points":
